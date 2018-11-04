@@ -1,0 +1,150 @@
+#include "memlib.c"
+
+/* 基本常数大小 */
+#define WSIZE   4   /* 字大小 */
+#define DSIZE   8   /* 双字大小 */
+#define CHUNKSIZE   (1<<12) /* 初始块大小和扩展堆时的默认大小 */
+
+#define MAX(x,y)    ((x) > (y)? (x) : (y))
+
+#define PACK(size,alloc) ((size)|(alloc))   /* 将大小和已分配位结合并返回一个指，可把它存放在头部或者脚部中 */
+
+#define GET(p)      (*(unsigned int *)(p))          /* 读取和返回参数p引用的字 */
+#define PUT(p,val)  (*(unsigned int *)(p) = (val))  /* 将val存放在参数p指向的字中*/
+
+#define GET_SIZE(p)     (GET(p) & -0x7) /* 从p处的头部或者脚部分别返回大小 */
+#define GET_ALLOC(p)    (GET(p) & 0x1)  /* 从p处的头部或者脚部分别返回已分配位 */
+
+#define HDRP(bp)    ((char *)(bp) - WSIZE)  /* 返回指向块的头部 */
+#define FTRP(bp)    ((char *)(bp) + GET_SIZE(HDRP(bp)) - DSIZE) /* 返回指向块的头部 */
+
+#define NEXT_BLKP(bp)   ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE)))   /* 返回指向后面的块的块指针 */
+#define PREV_BLKP(bp)   ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE)))   /* 返回指向前面的块的块指针 */
+
+
+/*
+ * mm_init函数初始化分配器,
+ * 成功返回0，
+ * 否则返回-1
+ */
+int mm_init () {
+    // 从系统得到4个字
+    if ((heap_listp = mem_sbrk(4*WSIZE)) == (void *)-1) {
+        return -1;
+    }
+    // 初始化
+    PUT(heap_listp, 0);
+    PUT(heap_listp + (1*WSIZE), PACK(DSIZE, 1));
+    PUT(heap_listp + (2*WSIZE), PACK(DSIZE, 1));
+    PUT(heap_listp + (3*WSIZE), PACK(0, 1));
+    // 创建一个空的空闲链表
+    heap_listp += (2*WSIZE);
+    // 将堆扩展CHUNKSIZE字节，并且创建初始的空闲块
+    if (extend_heap(CHUNKSIZE/WSIZE) == NULL) {
+        return -1;
+    }
+    return 0;
+}
+
+/*
+ * extend_heap函数在堆被初始化，或mm_malloc不能找到一个合适的匹配块时调用。
+ */
+static void *extend_heap(size_t words) {
+    char *bp;
+    size_t size;
+    // 将请求大小向上舍入为最接近的2字（8字节）的倍数，然后向系统请求额外堆空间
+    size = (word % 2) ? (words + 1) * WSIZE : words * WSIZE;
+    if ((long)(bp = mem_sbrk(size)) == -1) {
+        return NULL;
+    }
+    // 返回指向合并后的块的块指针
+    PUT(HDRP(bp), PACK(size, 0));
+    PUT(FTRP(bp), PACK(size, 0));
+    PUT(HDRP(NEXT_BLKP(bp)), PACk(0, 1));
+
+    return coalesce(bp);
+}
+
+/*
+ * mm_free函数与free系统函数有相同的接口和语义
+ */
+void mm_free(void *bp) {
+    size_t size = GET_SIZE(HDRP(bp));
+
+    PUT(HDRP(bp), PACK(size, 0));
+    PUT(FTRP(bp), PACK(size, 0));
+    coalesce(bp);
+}
+
+/*
+ * coalesce函数
+ */
+static void *coalesce (void *bp) {
+    size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
+    size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
+    size_t size = GET_ALLOC(HDRP(bp));
+
+    if (prev_alloc && next_alloc) {
+        return bp;
+    } else if (prev_alloc && !next_alloc) {
+        size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
+        PUT(HDRP(bp), PACK(size, 0));
+        PUT(FTRP(bp), PACK(size, 0));
+    } else if (!prev_alloc && next_alloc) {
+        size += GET_SIZE(HDRP(PREV_BLKP(bp)));
+        PUT(FTRP(bp), PACK(size, 0));
+        PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
+        bp = PREV_BLKP(bp);
+    } else {
+        size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXT_BLKP(bp)));
+        PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
+        PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
+        bp = PREV_BLKP(bp);
+    }
+    return bp;
+}
+
+/*
+ * mm_malloc函数与malloc系统函数有相同的接口和语义
+ */
+void *mm_malloc (size_t size) {
+    size_t asize;
+    size_t extendsize;
+    char *bp;
+    // 检查请求真假
+    if (size == 0) {
+        return NULL;
+    }
+    // 调整请求块的大小
+    if (size <= DSIZE) {
+        asize = 2 * DSIZE;
+    } else {
+        asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
+    }
+    // 搜索空闲链表，寻找一个合适的空闲块，放置请求块后，分割出多余部分，后返回新地址
+    if ((bp = find_fit(asize)) != NULL) {
+        place(bp, asize);
+        return bp;
+    }
+    // 用新空闲块扩展堆，放置请求块后，分割出多余部分，后返回新地址
+    extendsize = MAX(asize, CHUNKSIZE);
+    if ((bp = extend_heap(extendsize/WSIZE)) == NULL) {
+        return NULL;
+    }
+    place(bp, asize);
+    return bp;
+}
+
+/*
+ * 对隐式空闲链表执行首次适配搜索
+ */
+static void *find_fit (size_t asize) {
+
+}
+
+/*
+ * 将请求块放置在空闲块的起始位置，只有当剩余部分的大小等于或者超出最小块的大小时，才进行分割
+ */
+static void place (void *bp, size_t asize) {
+
+}

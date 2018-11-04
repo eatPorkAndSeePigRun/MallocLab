@@ -1,0 +1,38 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <errno.h>
+
+#define MAX_HEAP 0xffffffff
+
+static char *mem_heap;  // mem_heap和mem_brk之间的字节表示已分配的虚拟内存
+static char *mem_brk;   // mem_brk之后的字节表示未分配的虚拟内存
+static char *mem_max_addr;
+
+/*
+ * 将对于堆来说可用的虚拟内存模型化为一个大的、双字对齐的字节数组
+ */
+void mem_init () {
+    mem_heap = (char *)malloc(MAX_HEAP);
+    if (NULL == mem_heap) {
+        printf("mem_init() error\n");
+        exit(0);
+    }
+    mem_brk = (char *)mem_heap;
+    mem_max_addr = (char *)(mem_heap + MAX_HEAP);
+}
+
+/*
+ * mem_sbrk函数用来请求额外的堆内存
+ */
+void *mem_sbrk(int incr) {
+    char *old_brk = mem_brk;
+    if (incr < 0 || mem_brk + incr > mem_max_addr) {
+        errno = ENOMEM;
+        fprintf(stderr, "ERROR: meme_sbrk failed. Ran out of memory...\n");
+        return (void *)-1;
+    }
+    mem_brk += incr;
+    return (void *)old_brk;
+}
+
+
