@@ -7,7 +7,7 @@
 
 #define MAX(x,y)    ((x) > (y)? (x) : (y))
 
-#define PACK(size,alloc) ((size)|(alloc))   /* 将大小和已分配位结合并返回一个指，可把它存放在头部或者脚部中 */
+#define PACK(size,alloc) ((size)|(alloc))   /* 将大小和已分配位结合并返回一个值，可把它存放在头部或者脚部中 */
 
 #define GET(p)      (*(unsigned int *)(p))          /* 读取和返回参数p引用的字 */
 #define PUT(p,val)  (*(unsigned int *)(p) = (val))  /* 将val存放在参数p指向的字中*/
@@ -16,7 +16,7 @@
 #define GET_ALLOC(p)    (GET(p) & 0x1)  /* 从p处的头部或者脚部分别返回已分配位 */
 
 #define HDRP(bp)    ((char *)(bp) - WSIZE)  /* 返回指向块的头部 */
-#define FTRP(bp)    ((char *)(bp) + GET_SIZE(HDRP(bp)) - DSIZE) /* 返回指向块的头部 */
+#define FTRP(bp)    ((char *)(bp) + GET_SIZE(HDRP(bp)) - DSIZE) /* 返回指向块的脚部 */
 
 #define NEXT_BLKP(bp)   ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE)))   /* 返回指向后面的块的块指针 */
 #define PREV_BLKP(bp)   ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE)))   /* 返回指向前面的块的块指针 */
@@ -34,9 +34,9 @@ int mm_init () {
     }
     // 初始化
     PUT(heap_listp, 0);
-    PUT(heap_listp + (1*WSIZE), PACK(DSIZE, 1));
-    PUT(heap_listp + (2*WSIZE), PACK(DSIZE, 1));
-    PUT(heap_listp + (3*WSIZE), PACK(0, 1));
+    PUT(heap_listp + (1*WSIZE), PACK(DSIZE, 1));    // 序言块头部
+    PUT(heap_listp + (2*WSIZE), PACK(DSIZE, 1));    // 序言块脚部
+    PUT(heap_listp + (3*WSIZE), PACK(0, 1));        // 结尾块头部
     // 创建一个空的空闲链表
     heap_listp += (2*WSIZE);
     // 将堆扩展CHUNKSIZE字节，并且创建初始的空闲块
@@ -82,7 +82,7 @@ void mm_free(void *bp) {
 static void *coalesce (void *bp) {
     size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
-    size_t size = GET_ALLOC(HDRP(bp));
+    size_t size = GET_SIZE(HDRP(bp));
 
     if (prev_alloc && next_alloc) {
         return bp;
@@ -139,12 +139,30 @@ void *mm_malloc (size_t size) {
  * 对隐式空闲链表执行首次适配搜索
  */
 static void *find_fit (size_t asize) {
-
+    void *bp;
+    
+    for (bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp)) {
+        if (!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp)))) {
+            return bp;
+        }
+    }
+    return NULL;
 }
 
 /*
  * 将请求块放置在空闲块的起始位置，只有当剩余部分的大小等于或者超出最小块的大小时，才进行分割
  */
 static void place (void *bp, size_t asize) {
+    size_t csize = GET_SIZE(HDRP(bp));
 
+    if ((csize - asize) >= (2*DSIZE)) {     // 分割后剩下的块大于或等于最小块大小
+        PUT(HDRP(bp), PACK(asize, 1));
+        PUT(FTRP(bp), PACK(asize, 1));
+        bp = NEXT_BLKP(bp);                 // 放置新的已分配块
+        PUT(HDRP(bp), PACK(csize - asize, 0));
+        PUT(FTRP(bp), PACK(csize - asize, 0));
+    } else {
+        PUT(HDRP(bp), PACK(csize, 1));
+        PUT(FTRP(bp), PACK(csize, 1));
+    }
 }
